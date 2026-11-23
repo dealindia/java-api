@@ -40,11 +40,14 @@ jobs:
             echo "::error::SNYK_TOKEN secret is not set (Settings > Secrets and variables > Actions)."
             exit 1
           fi
+          echo "Snyk account for this token:"
+          snyk whoami --experimental || true
+          echo "Snyk org: ${SNYK_CFG_ORG:-<not set, using account default>}"
 
       - name: Snyk Code test
         run: |
           set +e
-          snyk code test --sarif-file-output=snyk-code.sarif
+          snyk code test ${SNYK_CFG_ORG:+--org="$SNYK_CFG_ORG"} --sarif-file-output=snyk-code.sarif
           rc=$?
           set -e
           # 0 = no issues, 1 = issues found (the gate decides), anything else = error
@@ -83,7 +86,7 @@ jobs:
       - name: Snyk Open Source test (project dependencies)
         run: |
           set +e
-          snyk test --all-projects --json-file-output=snyk-oss.json --sarif-file-output=snyk-oss.sarif
+          snyk test ${SNYK_CFG_ORG:+--org="$SNYK_CFG_ORG"} --all-projects --json-file-output=snyk-oss.json --sarif-file-output=snyk-oss.sarif
           rc=$?
           set -e
           # 3 = no supported manifest (pom.xml, build.gradle, ...) found: nothing to scan
@@ -101,7 +104,7 @@ jobs:
       - name: Snyk Container test (base image and runtime)
         run: |
           set +e
-          snyk container test java-api:scan --file=Dockerfile \
+          snyk container test java-api:scan ${SNYK_CFG_ORG:+--org="$SNYK_CFG_ORG"} --file=Dockerfile \
             --json-file-output=snyk-container.json --sarif-file-output=snyk-container.sarif
           rc=$?
           set -e
