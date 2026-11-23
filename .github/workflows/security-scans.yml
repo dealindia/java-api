@@ -40,9 +40,6 @@ jobs:
             echo "::error::SNYK_TOKEN secret is not set (Settings > Secrets and variables > Actions)."
             exit 1
           fi
-          echo "Snyk account for this token:"
-          snyk whoami --experimental || true
-          echo "Snyk org: ${SNYK_CFG_ORG:-<not set, using account default>}"
 
       - name: Snyk Code test
         run: |
