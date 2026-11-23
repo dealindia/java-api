@@ -1,0 +1,35 @@
+name: Dev Deploy
+
+# Dev has no restrictions: every push to `dev` builds and deploys straight away.
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-dev:
+    name: Deploy to DEV
+    runs-on: ubuntu-latest
+    environment: development
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t java-api:${{ github.sha }} .
+
+      - name: Smoke test
+        run: |
+          docker run -d --name app -p 8080:8080 java-api:${{ github.sha }}
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:8080/api/health && exit 0
+            sleep 2
+          done
+          echo "App did not start"; docker logs app; exit 1
+
+      - name: Deploy to DEV
+        run: |
+          echo "Deploying java-api:${{ github.sha }} to DEV"
+          # TODO: replace with the real deploy command for your dev environment

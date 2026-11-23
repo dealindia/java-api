@@ -1,0 +1,99 @@
+name: Security Scans
+
+# Runs on every PR into main (these are the required status checks),
+# and is reused by prod.yml before every production deploy.
+on:
+  pull_request:
+    branches: [main]
+  workflow_call:
+
+permissions:
+  contents: read
+  security-events: write   # upload findings to the Security tab
+  pull-requests: write     # dependency review comment on PRs
+
+env:
+  APP_PORT: 8080
+
+jobs:
+  # ---------------- SAST: your own source code ----------------
+  sast:
+    name: SAST (CodeQL)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: java
+          build-mode: none
+          queries: security-extended
+
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: sast
+
+  # ---------------- SCA: libraries and base images ----------------
+  sca:
+    name: SCA (Dependencies)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dependency Review (PRs only)
+        if: github.event_name == 'pull_request'
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+
+      - name: Trivy - scan project files
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true
+
+      - name: Build image
+        run: docker build -t java-api:scan .
+
+      - name: Trivy - scan Docker image
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: java-api:scan
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true
+
+  # ---------------- DAST: the running app ----------------
+  dast:
+    name: DAST (OWASP ZAP)
+    runs-on: ubuntu-latest
+    needs: [sast, sca]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and start the app
+        run: |
+          docker build -t java-api:dast .
+          docker run -d --name app -p ${APP_PORT}:${APP_PORT} java-api:dast
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:${APP_PORT}/api/health && exit 0
+            sleep 2
+          done
+          echo "App did not start"; docker logs app; exit 1
+
+      - name: ZAP baseline scan
+        uses: zaproxy/action-baseline@v0.14.0
+        with:
+          target: http://localhost:${{ env.APP_PORT }}/api/hello?name=zap
+          rules_file_name: .zap/rules.tsv
+          fail_action: true
+          allow_issue_writing: false
+          cmd_options: '-a'
+
+      - name: Stop app
+        if: always()
+        run: docker rm -f app

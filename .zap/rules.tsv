@@ -1,0 +1,2 @@
+# ZAP baseline rule overrides: <rule id>	<IGNORE|INFO|WARN|FAIL>	<note>
+# Add a line only for a finding you have reviewed and accepted.
