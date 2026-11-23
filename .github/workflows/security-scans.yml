@@ -23,13 +23,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: github/codeql-action/init@v3
+      - uses: github/codeql-action/init@v4
         with:
           languages: java
           build-mode: none
           queries: security-extended
 
-      - uses: github/codeql-action/analyze@v3
+      - uses: github/codeql-action/analyze@v4
         with:
           category: sast
 
@@ -47,7 +47,7 @@ jobs:
           fail-on-severity: high
 
       - name: Trivy - scan project files
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -60,7 +60,7 @@ jobs:
         run: docker build -t java-api:scan .
 
       - name: Trivy - scan Docker image
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: java-api:scan
           severity: HIGH,CRITICAL
@@ -86,7 +86,7 @@ jobs:
           echo "App did not start"; docker logs app; exit 1
 
       - name: ZAP baseline scan
-        uses: zaproxy/action-baseline@v0.14.0
+        uses: zaproxy/action-baseline@de8ad967d3548d44ef623df22cf95c3b0baf8b25 # v0.15.0
         with:
           target: http://localhost:${{ env.APP_PORT }}/api/hello?name=zap
           rules_file_name: .zap/rules.tsv

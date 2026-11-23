@@ -18,6 +18,9 @@ public class App {
             send(ex, 200, "{\"message\":\"Hello, " + name + "!\"}");
         });
 
+        // Catch-all so unknown paths also get a JSON 404 with security headers
+        server.createContext("/", ex -> send(ex, 404, "{\"error\":\"Not Found\"}"));
+
         server.start();
         System.out.println("API listening on port " + port);
     }
