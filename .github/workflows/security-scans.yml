@@ -2,72 +2,133 @@ name: Security Scans
 
 # Runs on every PR into main (these are the required status checks),
 # and is reused by prod.yml before every production deploy.
+#
+# Gate: a scan fails only when it finds MORE THAN `MAX_HIGH_FINDINGS`
+# high/critical issues. Otherwise it passes and the pipeline continues
+# to the manual prod approval.
 on:
   pull_request:
     branches: [main]
   workflow_call:
+    secrets:
+      SNYK_TOKEN:
+        required: true
 
 permissions:
   contents: read
   security-events: write   # upload findings to the Security tab
-  pull-requests: write     # dependency review comment on PRs
 
 env:
   APP_PORT: 8080
+  MAX_HIGH_FINDINGS: 3
+  SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
 
 jobs:
   # ---------------- SAST: your own source code ----------------
   sast:
-    name: SAST (CodeQL)
+    name: SAST (Snyk Code)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - uses: github/codeql-action/init@v4
-        with:
-          languages: java
-          build-mode: none
-          queries: security-extended
+      - uses: snyk/actions/setup@11b673cfb4b0dc0d860a1323caa199d54950dcce # master 2026-10-07
 
-      - uses: github/codeql-action/analyze@v4
+      - name: Check Snyk token
+        run: |
+          if [ -z "$SNYK_TOKEN" ]; then
+            echo "::error::SNYK_TOKEN secret is not set (Settings > Secrets and variables > Actions)."
+            exit 1
+          fi
+
+      - name: Snyk Code test
+        run: |
+          set +e
+          snyk code test --sarif-file-output=snyk-code.sarif
+          rc=$?
+          set -e
+          # 0 = no issues, 1 = issues found (the gate decides), anything else = error
+          if [ "$rc" -gt 1 ]; then
+            echo "::error::Snyk Code could not run (exit $rc). Is Snyk Code enabled for your Snyk org?"
+            exit 1
+          fi
+
+      - name: Gate - fail on more than ${{ env.MAX_HIGH_FINDINGS }} high findings
+        run: bash .github/scripts/snyk-gate.sh "SAST (Snyk Code)" "$MAX_HIGH_FINDINGS" snyk-code.sarif
+
+      - name: Upload results to GitHub Security tab
+        if: always() && hashFiles('snyk-code.sarif') != ''
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v4
         with:
-          category: sast
+          sarif_file: snyk-code.sarif
+          category: snyk-sast
 
   # ---------------- SCA: libraries and base images ----------------
   sca:
-    name: SCA (Dependencies)
+    name: SCA (Snyk)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Dependency Review (PRs only)
-        if: github.event_name == 'pull_request'
-        uses: actions/dependency-review-action@v4
-        with:
-          fail-on-severity: high
+      - uses: snyk/actions/setup@11b673cfb4b0dc0d860a1323caa199d54950dcce # master 2026-10-07
 
-      - name: Trivy - scan project files
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          scan-type: fs
-          scan-ref: .
-          scanners: vuln,secret,misconfig
-          severity: HIGH,CRITICAL
-          exit-code: '1'
-          ignore-unfixed: true
+      - name: Check Snyk token
+        run: |
+          if [ -z "$SNYK_TOKEN" ]; then
+            echo "::error::SNYK_TOKEN secret is not set (Settings > Secrets and variables > Actions)."
+            exit 1
+          fi
+
+      - name: Snyk Open Source test (project dependencies)
+        run: |
+          set +e
+          snyk test --all-projects --json-file-output=snyk-oss.json --sarif-file-output=snyk-oss.sarif
+          rc=$?
+          set -e
+          # 3 = no supported manifest (pom.xml, build.gradle, ...) found: nothing to scan
+          if [ "$rc" -eq 3 ]; then
+            echo "No dependency manifests found; skipping Open Source results."
+            rm -f snyk-oss.json snyk-oss.sarif
+          elif [ "$rc" -gt 1 ]; then
+            echo "::error::Snyk Open Source could not run (exit $rc)."
+            exit 1
+          fi
 
       - name: Build image
         run: docker build -t java-api:scan .
 
-      - name: Trivy - scan Docker image
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: java-api:scan
-          severity: HIGH,CRITICAL
-          exit-code: '1'
-          ignore-unfixed: true
+      - name: Snyk Container test (base image and runtime)
+        run: |
+          set +e
+          snyk container test java-api:scan --file=Dockerfile \
+            --json-file-output=snyk-container.json --sarif-file-output=snyk-container.sarif
+          rc=$?
+          set -e
+          if [ "$rc" -gt 1 ]; then
+            echo "::error::Snyk Container could not run (exit $rc)."
+            exit 1
+          fi
 
-  # ---------------- DAST: the running app ----------------
+      - name: Gate - fail on more than ${{ env.MAX_HIGH_FINDINGS }} high findings
+        run: bash .github/scripts/snyk-gate.sh "SCA (Snyk)" "$MAX_HIGH_FINDINGS" snyk-oss.json snyk-container.json
+
+      - name: Upload Open Source results to GitHub Security tab
+        if: always() && hashFiles('snyk-oss.sarif') != ''
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: snyk-oss.sarif
+          category: snyk-sca-open-source
+
+      - name: Upload Container results to GitHub Security tab
+        if: always() && hashFiles('snyk-container.sarif') != ''
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: snyk-container.sarif
+          category: snyk-sca-container
+
+  # ---------------- DAST: the running app (OWASP ZAP) ----------------
   dast:
     name: DAST (OWASP ZAP)
     runs-on: ubuntu-latest
